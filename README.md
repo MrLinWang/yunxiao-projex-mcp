@@ -80,7 +80,12 @@ YUNXIAO_USER_ACCESS_KEY_SECRET=...
 ## 接入 Codex
 
 ```bash
-codex mcp add yunxiao_projex -- uvx yunxiao-projex-mcp
+codex mcp add yunxiao_projex \
+  --env YUNXIAO_API_ORG_ID=... \
+  --env YUNXIAO_API_PROJECT_ID=... \
+  --env YUNXIAO_USER_ACCESS_KEY_ID=... \
+  --env YUNXIAO_USER_ACCESS_KEY_SECRET=... \
+  -- uvx yunxiao-projex-mcp
 codex mcp list
 ```
 
