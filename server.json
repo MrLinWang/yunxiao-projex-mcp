@@ -1,0 +1,61 @@
+{
+  "$schema": "https://static.modelcontextprotocol.io/schemas/2025-09-29/server.schema.json",
+  "name": "io.github.MrLinWang/aliyun-yunxiao-projex-mcp",
+  "description": "MCP server for Alibaba Cloud Yunxiao Projex: work items, sprints, comments, members.",
+  "version": "0.1.0",
+  "websiteUrl": "https://github.com/MrLinWang/yunxiao-projex-mcp",
+  "repository": {
+    "url": "https://github.com/MrLinWang/yunxiao-projex-mcp",
+    "source": "github"
+  },
+  "packages": [
+    {
+      "registryType": "pypi",
+      "registryBaseUrl": "https://pypi.org",
+      "identifier": "yunxiao-projex-mcp",
+      "version": "0.1.0",
+      "runtimeHint": "uvx",
+      "transport": {
+        "type": "stdio"
+      },
+      "environmentVariables": [
+        {
+          "name": "YUNXIAO_USER_ACCESS_KEY_ID",
+          "description": "Yunxiao Bot AccessKey ID",
+          "isRequired": true,
+          "isSecret": false,
+          "format": "string"
+        },
+        {
+          "name": "YUNXIAO_USER_ACCESS_KEY_SECRET",
+          "description": "Yunxiao Bot AccessKey Secret",
+          "isRequired": true,
+          "isSecret": true,
+          "format": "string"
+        },
+        {
+          "name": "YUNXIAO_API_ORG_ID",
+          "description": "Yunxiao organization ID",
+          "isRequired": true,
+          "isSecret": false,
+          "format": "string"
+        },
+        {
+          "name": "YUNXIAO_API_PROJECT_ID",
+          "description": "Yunxiao Projex project ID",
+          "isRequired": true,
+          "isSecret": false,
+          "format": "string"
+        },
+        {
+          "name": "YUNXIAO_API_ENDPOINT",
+          "description": "Yunxiao API endpoint; defaults to devops.cn-hangzhou.aliyuncs.com",
+          "isRequired": false,
+          "isSecret": false,
+          "format": "string",
+          "default": "devops.cn-hangzhou.aliyuncs.com"
+        }
+      ]
+    }
+  ]
+}
