@@ -1,7 +1,7 @@
 {
   "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
   "name": "io.github.MrLinWang/aliyun-yunxiao-projex-mcp",
-  "description": "MCP server for Alibaba Cloud Yunxiao Projex: work items, sprints, comments, members, and authenticated file downloads.",
+  "description": "Alibaba Cloud Yunxiao Projex MCP with authenticated file downloads.",
   "version": "0.1.1",
   "websiteUrl": "https://github.com/MrLinWang/yunxiao-projex-mcp",
   "repository": {
