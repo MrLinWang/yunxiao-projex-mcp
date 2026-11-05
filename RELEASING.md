@@ -1,12 +1,14 @@
 # 发布说明
 
-发布流程分两步：先发 PyPI，再发官方 MCP Registry。Registry 会校验 PyPI 包 README 中的 `mcp-name` 标记，所以顺序不能颠倒。
+发布流程依次为：更新版本、发布 PyPI、发布官方 MCP Registry，最后校验发布并同步 Skill。
+Registry 会校验 PyPI 包 README 中的 `mcp-name` 标记，所以 PyPI 必须先于 Registry。
 
 ## 1. 更新版本
 
-同时修改两处版本号，`tests/test_packaging.py` 会校验它们一致：
+同时修改三处版本号，`tests/test_packaging.py` 会校验它们一致：
 
 - `pyproject.toml` 的 `[project].version`
+- `src/yunxiao_projex_mcp/__init__.py` 的 `__version__`
 - `server.json` 的 `version` 和 `packages[0].version`
 
 ## 2. 发布到 PyPI
@@ -45,3 +47,11 @@ curl -s 'https://registry.modelcontextprotocol.io/v0/servers?search=aliyun&versi
 两条都应返回该服务。Magpie 的 Discover 搜索的是 Registry 中的服务名，因此名称里保留 `aliyun`、`yunxiao`、`projex`、`mcp` 这些关键词才能被搜到。
 
 要出现在 Magpie Discover 的默认页（空搜索），需要向 [yetone/magpie](https://github.com/yetone/magpie) 的 `internal/library/market.go` 提交 featured 条目 PR；Registry 发布只保证能被关键词搜索到。
+
+## 5. 同步 Skill
+
+仓库内的 `skills/yunxiao-projex/` 与 MCP 工具契约一起维护。发布前检查：
+
+- 新增、删除或重命名工具时，同步更新 README 的「工具」列表和 `SKILL.md` 的工具名、操作边界。
+- 参数格式、权限或附件行为变化时，同步修改 README 的「使用约定/权限限制」、`SKILL.md` 和 `server.json` 描述。
+- 运行 `python3 "${CODEX_HOME:-$HOME/.codex}/skills/.system/skill-creator/scripts/quick_validate.py" skills/yunxiao-projex`，并确认 README 中的安装命令仍可用。

@@ -1,0 +1,10 @@
+interface:
+  display_name: "云效 Projex"
+  short_description: "Read and manage Yunxiao Projex work items safely"
+  default_prompt: "Use $yunxiao-projex to inspect this Yunxiao Projex project and summarize its latest work."
+
+dependencies:
+  tools:
+    - type: "mcp"
+      value: "aliyun-yunxiao-projex"
+      description: "Yunxiao Projex MCP server"

@@ -42,6 +42,8 @@ MAX_FILE_SIZE = 10 * 1024 * 1024
 
 @dataclass(frozen=True)
 class DownloadedFile:
+    """Authenticated work item file fetched from its signed download URL."""
+
     name: str
     size: int
     mime_type: str
@@ -381,6 +383,13 @@ class ProjexClient:
         workitem_id: str,
         file_id: str,
     ) -> DownloadedFile:
+        """Fetch a file after confirming the work item belongs to this project.
+
+        The signed URL is downloaded over HTTP(S), with a 10 MiB limit. The MIME
+        type is inferred from the filename or response; URL and HTTP failures are
+        raised as YunxiaoError.
+        """
+
         await self._ensure_workitem(workitem_id)
         body = await self._call(
             self._sdk.get_workitem_file_with_options_async,
