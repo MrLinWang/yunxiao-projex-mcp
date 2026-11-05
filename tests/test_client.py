@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 
+import httpx
 import pytest
 
 from yunxiao_projex_mcp.client import ProjexClient, YunxiaoError
@@ -40,6 +41,95 @@ async def test_sprint_outside_project_is_rejected():
 
     with pytest.raises(YunxiaoError, match="不属于当前项目"):
         await client.get_sprint("s-1")
+
+
+@pytest.mark.anyio
+async def test_file_outside_project_is_rejected_before_download():
+    sdk = FakeSdk()
+    sdk.responses["get_work_item_info_with_options_async"] = {
+        "success": True,
+        "workitem": {"identifier": "w-1", "spaceIdentifier": "other-project"},
+    }
+    client = ProjexClient(make_config(), sdk)
+
+    with pytest.raises(YunxiaoError, match="不属于当前项目"):
+        await client.get_workitem_file("w-1", "file-1")
+
+    called = [name for name, _args, _kwargs in sdk.calls]
+    assert "get_workitem_file_with_options_async" not in called
+
+
+@pytest.mark.anyio
+async def test_file_download_uses_authenticated_metadata_and_returns_content(monkeypatch):
+    sdk = FakeSdk()
+    sdk.responses["get_work_item_info_with_options_async"] = {
+        "success": True,
+        "workitem": {"identifier": "w-1", "spaceIdentifier": "project-1"},
+    }
+    sdk.responses["get_workitem_file_with_options_async"] = {
+        "success": True,
+        "workitemFile": {
+            "name": "image.png",
+            "size": 3,
+            "url": "https://files.example.com/signed",
+        },
+    }
+    client = ProjexClient(make_config(), sdk)
+
+    class FakeHttp:
+        def __init__(self, **kwargs):
+            self.kwargs = kwargs
+            self.urls = []
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_args):
+            return None
+
+        async def get(self, url):
+            self.urls.append(url)
+            return httpx.Response(
+                200,
+                request=httpx.Request("GET", url),
+                headers={"content-type": "image/png"},
+                content=b"png",
+            )
+
+    http = FakeHttp()
+    def make_http(**kwargs):
+        http.kwargs = kwargs
+        return http
+
+    monkeypatch.setattr(httpx, "AsyncClient", make_http)
+
+    result = await client.get_workitem_file("w-1", "file-1")
+
+    assert result.data == b"png"
+    assert result.mime_type == "image/png"
+    assert http.urls == ["https://files.example.com/signed"]
+    assert http.kwargs == {"timeout": 30, "follow_redirects": True}
+
+
+@pytest.mark.anyio
+async def test_file_download_rejects_large_metadata_before_http():
+    sdk = FakeSdk()
+    sdk.responses["get_work_item_info_with_options_async"] = {
+        "success": True,
+        "workitem": {"identifier": "w-1", "spaceIdentifier": "project-1"},
+    }
+    sdk.responses["get_workitem_file_with_options_async"] = {
+        "success": True,
+        "workitemFile": {
+            "name": "large.bin",
+            "size": 10 * 1024 * 1024 + 1,
+            "url": "https://files.example.com/signed",
+        },
+    }
+    client = ProjexClient(make_config(), sdk)
+
+    with pytest.raises(YunxiaoError, match="10 MiB"):
+        await client.get_workitem_file("w-1", "file-1")
 
 
 @pytest.mark.anyio

@@ -1,10 +1,13 @@
 from __future__ import annotations
 
 import json
+import mimetypes
 from collections.abc import Awaitable, Callable, Mapping
+from dataclasses import dataclass
 from datetime import date
 from typing import Any
 
+import httpx
 from alibabacloud_devops20210625 import models as devops_models
 from alibabacloud_devops20210625.client import Client as DevopsClient
 from alibabacloud_tea_openapi import models as open_api_models
@@ -34,6 +37,15 @@ _WORKITEM_FIELDS = (
     "workitemTypeIdentifier",
     "updateStatusAt",
 )
+MAX_FILE_SIZE = 10 * 1024 * 1024
+
+
+@dataclass(frozen=True)
+class DownloadedFile:
+    name: str
+    size: int
+    mime_type: str
+    data: bytes
 
 
 class YunxiaoError(Exception):
@@ -363,6 +375,55 @@ class ProjexClient:
 
     async def get_workitem(self, workitem_id: str) -> dict[str, Any]:
         return await self._ensure_workitem(workitem_id)
+
+    async def get_workitem_file(
+        self,
+        workitem_id: str,
+        file_id: str,
+    ) -> DownloadedFile:
+        await self._ensure_workitem(workitem_id)
+        body = await self._call(
+            self._sdk.get_workitem_file_with_options_async,
+            self.config.org_id,
+            workitem_id,
+            file_id,
+            {},
+            self._runtime,
+        )
+        file_info = body.get("workitemFile") or {}
+        name = file_info.get("name") or file_id
+        size = file_info.get("size")
+        if isinstance(size, int) and size > MAX_FILE_SIZE:
+            raise YunxiaoError("附件不能超过 10 MiB", code="FileTooLarge")
+        url = file_info.get("url")
+        if not isinstance(url, str) or not url.startswith(("https://", "http://")):
+            raise YunxiaoError("云效未返回有效的附件下载地址", code="InvalidFileUrl")
+
+        try:
+            async with httpx.AsyncClient(
+                timeout=30,
+                follow_redirects=True,
+            ) as http:
+                response = await http.get(url)
+                response.raise_for_status()
+                data = response.content
+                content_type = response.headers.get("content-type", "").split(";")[0]
+        except httpx.HTTPStatusError as exc:
+            raise YunxiaoError(
+                f"附件下载失败 (HTTP {exc.response.status_code})",
+                code="FileDownloadFailed",
+            ) from exc
+        except httpx.HTTPError as exc:
+            raise YunxiaoError("附件下载请求失败", code="FileDownloadFailed") from exc
+
+        if len(data) > MAX_FILE_SIZE:
+            raise YunxiaoError("附件不能超过 10 MiB", code="FileTooLarge")
+        mime_type = (
+            mimetypes.guess_type(name)[0]
+            or (content_type if content_type.startswith("image/") else None)
+            or "application/octet-stream"
+        )
+        return DownloadedFile(name, len(data), mime_type, data)
 
     async def list_workitem_comments(self, workitem_id: str) -> dict[str, Any]:
         await self._ensure_workitem(workitem_id)

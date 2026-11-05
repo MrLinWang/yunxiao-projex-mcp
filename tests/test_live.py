@@ -82,7 +82,7 @@ async def test_live_stdio_entrypoint():
         async with ClientSession(read, write) as session:
             await session.initialize()
             tools = await session.list_tools()
-            assert len(tools.tools) == 17
+            assert len(tools.tools) == 18
 
             result = await session.call_tool("get_project", {})
 

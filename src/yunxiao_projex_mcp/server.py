@@ -1,12 +1,21 @@
 from __future__ import annotations
 
+import base64
+import json
 import sys
 from collections.abc import Awaitable, Callable
 from typing import Annotated, Any, Literal
 
 from mcp.server.fastmcp import FastMCP
 from mcp.server.fastmcp.exceptions import ToolError
-from mcp.types import ToolAnnotations
+from mcp.types import (
+    BlobResourceContents,
+    CallToolResult,
+    EmbeddedResource,
+    ImageContent,
+    TextContent,
+    ToolAnnotations,
+)
 from pydantic import Field
 
 from .client import ProjexClient, YunxiaoError
@@ -129,6 +138,45 @@ def create_server(client: ProjexClient) -> FastMCP:
     )
     async def get_workitem(workitem_id: Identifier) -> dict[str, Any]:
         return await _run(client.get_workitem, workitem_id)
+
+    @server.tool(
+        name="get_workitem_file",
+        description=(
+            "认证下载当前项目工作项中的文件或图片。图片直接返回图像内容；"
+            "其他文件返回 Base64。仅支持描述等富文本中的 fileIdentifier，最大 10 MiB。"
+        ),
+        annotations=READ,
+    )
+    async def get_workitem_file(
+        workitem_id: Identifier,
+        file_id: Identifier,
+    ) -> CallToolResult:
+        file = await _run(client.get_workitem_file, workitem_id, file_id)
+        metadata = {
+            "name": file.name,
+            "size": file.size,
+            "mimeType": file.mime_type,
+        }
+        text = TextContent(
+            type="text",
+            text=json.dumps(metadata, ensure_ascii=False),
+        )
+        encoded = base64.b64encode(file.data).decode("ascii")
+        if file.mime_type in ("image/png", "image/jpeg", "image/gif", "image/webp"):
+            image = ImageContent(type="image", data=encoded, mimeType=file.mime_type)
+            return CallToolResult(
+                content=[text, image],
+                structuredContent=metadata,
+            )
+        resource = BlobResourceContents(
+            uri=f"yunxiao://workitem/{workitem_id}/file/{file_id}",
+            mimeType=file.mime_type,
+            blob=encoded,
+        )
+        return CallToolResult(
+            content=[text, EmbeddedResource(type="resource", resource=resource)],
+            structuredContent=metadata,
+        )
 
     @server.tool(
         name="list_workitem_comments",

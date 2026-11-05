@@ -111,7 +111,7 @@ YUNXIAO_USER_ACCESS_KEY_SECRET = "..."
 
 ## 工具
 
-只读：`get_project`、`list_project_members`、`list_workitem_types`、`list_workitem_fields`、`list_workitem_statuses`、`list_workitems`、`get_workitem`、`list_workitem_comments`、`list_sprints`、`get_sprint`。
+只读：`get_project`、`list_project_members`、`list_workitem_types`、`list_workitem_fields`、`list_workitem_statuses`、`list_workitems`、`get_workitem`、`get_workitem_file`、`list_workitem_comments`、`list_sprints`、`get_sprint`。
 
 写入：`create_workitem`、`update_workitem`、`create_workitem_comment`、`update_workitem_comment`、`create_sprint`。
 
@@ -123,13 +123,14 @@ YUNXIAO_USER_ACCESS_KEY_SECRET = "..."
 - 创建工作项前先查 `list_workitem_types`、`list_workitem_fields` 和 `list_workitem_statuses`；必填自定义字段（例如 `priority`）通过 `custom_fields` 传入选项 ID。
 - `list_project_members` 内部固定使用 `targetType=Space`。
 - 描述和评论默认使用 Markdown；日期使用 `YYYY-MM-DD`。
+- `get_workitem_file` 使用 Bot Key 认证获取下载地址并下载内容。传入工作项 ID 及描述等富文本图片 URL 中的 `fileIdentifier`；PNG、JPEG、GIF、WebP 以图片内容返回，其他文件以 Base64 嵌入资源返回，最大 10 MiB。
 - 删除评论和删除工作项会先校验资源属于当前项目，再执行删除；工作项删除为异步生效，列表索引可能需要数秒刷新。
 - `create_workitem_comment` 默认创建顶级评论，回复评论时才需要传 `parent_id`。
 
 ## 权限限制
 
 - 当前 Bot 角色为“开发机器人”，修改项目字段、管理项目成员会返回 403。
-- 不包含工时/预估、附件、工作项关联、工作项动态、项目创建/删除、迭代修改/删除。
+- 不包含工时/预估、附件上传、工作项关联、工作项动态、项目创建/删除、迭代修改/删除。
 - 代码库与流水线不在本服务范围内。
 
 ## 测试

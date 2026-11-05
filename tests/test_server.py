@@ -4,8 +4,9 @@ import json
 
 import pytest
 from mcp.shared.memory import create_connected_server_and_client_session
+from mcp.types import ImageContent
 
-from yunxiao_projex_mcp.client import YunxiaoError
+from yunxiao_projex_mcp.client import DownloadedFile, YunxiaoError
 from yunxiao_projex_mcp.server import create_server
 
 
@@ -15,6 +16,9 @@ class FakeClient:
 
     async def get_workitem(self, _workitem_id):
         raise YunxiaoError("workitem not found", code="NotFound")
+
+    async def get_workitem_file(self, _workitem_id, _file_id):
+        return DownloadedFile("image.png", 3, "image/png", b"png")
 
     async def list_project_members(self):
         return {"members": []}
@@ -70,7 +74,7 @@ async def test_server_registers_expected_tools_and_annotations():
         result = await session.list_tools()
 
     tools = {tool.name: tool for tool in result.tools}
-    assert len(tools) == 17
+    assert len(tools) == 18
     assert set(tools) == {
         "get_project",
         "list_project_members",
@@ -79,6 +83,7 @@ async def test_server_registers_expected_tools_and_annotations():
         "list_workitem_statuses",
         "list_workitems",
         "get_workitem",
+        "get_workitem_file",
         "list_workitem_comments",
         "list_sprints",
         "get_sprint",
@@ -116,3 +121,25 @@ async def test_server_converts_yunxiao_error_to_tool_error():
 
     assert result.isError is True
     assert "workitem not found" in result.content[0].text
+
+
+@pytest.mark.anyio
+async def test_server_returns_downloaded_image_content():
+    server = create_server(FakeClient())
+
+    async with create_connected_server_and_client_session(server) as session:
+        result = await session.call_tool(
+            "get_workitem_file",
+            {"workitem_id": "w-1", "file_id": "file-1"},
+        )
+
+    assert result.isError is False
+    assert result.structuredContent == {
+        "name": "image.png",
+        "size": 3,
+        "mimeType": "image/png",
+    }
+    image = result.content[1]
+    assert isinstance(image, ImageContent)
+    assert image.mimeType == "image/png"
+    assert image.data == "cG5n"

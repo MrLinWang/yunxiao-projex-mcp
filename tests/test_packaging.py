@@ -23,6 +23,7 @@ def test_server_json_matches_package_metadata() -> None:
 
     assert server["name"] == "io.github.MrLinWang/aliyun-yunxiao-projex-mcp"
     assert server["version"] == project["version"]
+    assert server["version"] == __import__("yunxiao_projex_mcp").__version__
 
     (package,) = server["packages"]
     assert package["registryType"] == "pypi"
