@@ -1885,7 +1885,7 @@ wheels = [
 
 [[package]]
 name = "yunxiao-projex-mcp"
-version = "0.1.2"
+version = "0.1.3"
 source = { editable = "." }
 dependencies = [
     { name = "alibabacloud-devops20210625" },
