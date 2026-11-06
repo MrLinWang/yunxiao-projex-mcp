@@ -1,7 +1,7 @@
 interface:
   display_name: "云效 Projex"
-  short_description: "Read and manage Yunxiao Projex work items safely"
-  default_prompt: "Use $yunxiao-projex to inspect this Yunxiao Projex project and summarize its latest work."
+  short_description: "Read, manage, and track Yunxiao Projex work items"
+  default_prompt: "Use $yunxiao-projex to inspect this Yunxiao Projex project, summarize its latest work, identify work items assigned to the current user, keep the relevant requirement/bug/task status updated from start through verification, and record submitted PR links in the work item comments."
 
 dependencies:
   tools:

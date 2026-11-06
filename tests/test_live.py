@@ -31,7 +31,15 @@ async def test_live_project_reads(client: ProjexClient):
     assert project["name"] == "ArchRanking"
 
     members = await client.list_project_members()
-    assert any(member["displayName"] == "yunxiao-bot" for member in members["members"])
+    bot = next(
+        member
+        for member in members["members"]
+        if member["displayName"] == "yunxiao-bot"
+    )
+
+    current_user = await client.get_current_user()
+    assert current_user["displayName"] == "yunxiao-bot"
+    assert current_user["identifier"] == bot["identifier"]
 
     types = await client.list_workitem_types("Req")
     assert types["workitem_types"]
@@ -46,8 +54,14 @@ async def test_live_project_reads(client: ProjexClient):
     assert statuses["statuses"]
 
     workitems = await client.list_workitems("Req", max_results=5)
-    assert workitems["items"] == []
-    assert workitems["total_count"] == 0
+    assert all("isMine" in item for item in workitems["items"])
+    assert all(
+        item.get("isMine") in (True, False, None)
+        for item in workitems["items"]
+    )
+
+    mine = await client.list_workitems("Req", assigned_to_me=True, max_results=5)
+    assert all(item["isMine"] is True for item in mine["items"])
 
     sprints = await client.list_sprints(max_results=5)
     assert sprints["items"] == []
@@ -82,7 +96,7 @@ async def test_live_stdio_entrypoint():
         async with ClientSession(read, write) as session:
             await session.initialize()
             tools = await session.list_tools()
-            assert len(tools.tools) == 18
+            assert len(tools.tools) == 19
 
             result = await session.call_tool("get_project", {})
 

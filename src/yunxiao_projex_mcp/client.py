@@ -77,6 +77,7 @@ class ProjexClient:
         self.config = config
         self._sdk = sdk or self._build_sdk(config)
         self._runtime = util_models.RuntimeOptions(autoretry=False)
+        self._current_user: dict[str, Any] | None = None
 
     @staticmethod
     def _build_sdk(config: Config) -> DevopsClient:
@@ -225,6 +226,129 @@ class ProjexClient:
         ]
         return {"members": members}
 
+    async def get_current_user(self) -> dict[str, Any]:
+        if self._current_user is not None:
+            return dict(self._current_user)
+
+        body = await self._call(
+            self._sdk.get_user_info_with_options_async,
+            devops_models.GetUserInfoRequest(organization_id=self.config.org_id),
+            {},
+            self._runtime,
+        )
+        user = body.get("result") or {}
+        display_name = str(user.get("name") or "").strip()
+        if not display_name:
+            raise YunxiaoError(
+                "无法从当前 AccessKey 获取云效用户显示名",
+                code="CurrentUserUnavailable",
+            )
+        if self.config.user_name and display_name != self.config.user_name:
+            suffix = (
+                f" (username={user.get('username')})"
+                if user.get("username")
+                else ""
+            )
+            raise YunxiaoError(
+                "YUNXIAO_USER_NAME 与当前 AccessKey 用户的显示名不一致: "
+                f"配置 {self.config.user_name!r}，实际 {display_name!r}{suffix}",
+                code="UserMismatch",
+            )
+
+        project_members = (await self.list_project_members())["members"]
+        project_ids = {
+            str(member["identifier"])
+            for member in project_members
+            if member.get("identifier")
+        }
+        account_ids: list[str] = []
+        try:
+            org_body = await self._call(
+                self._sdk.list_organization_members_with_options_async,
+                self.config.org_id,
+                devops_models.ListOrganizationMembersRequest(
+                    organization_member_name=display_name,
+                    max_results=100,
+                ),
+                {},
+                self._runtime,
+            )
+            for member in org_body.get("members") or []:
+                if (
+                    member.get("organizationMemberName") == display_name
+                    and member.get("state") in (None, "normal")
+                    and member.get("accountId")
+                ):
+                    account_ids.append(str(member["accountId"]))
+        except YunxiaoError:
+            account_ids = []
+
+        matched = list(
+            dict.fromkeys(
+                account_id
+                for account_id in account_ids
+                if account_id in project_ids
+            )
+        )
+        if len(matched) > 1:
+            raise YunxiaoError(
+                f"无法唯一确定云效用户 {display_name!r} 在当前项目中的成员 ID",
+                code="AmbiguousProjectMember",
+            )
+
+        identifier = matched[0] if matched else None
+        if identifier is None:
+            by_name = list(
+                dict.fromkeys(
+                    str(member["identifier"])
+                    for member in project_members
+                    if member.get("displayName") == display_name
+                    and member.get("identifier")
+                )
+            )
+            if len(by_name) == 1:
+                identifier = by_name[0]
+            elif len(by_name) > 1:
+                raise YunxiaoError(
+                    f"云效用户 {display_name!r} 在当前项目中有多个同名成员",
+                    code="AmbiguousProjectMember",
+                )
+            else:
+                raise YunxiaoError(
+                    f"当前 AccessKey 用户 {display_name!r} 不在项目成员中",
+                    code="UserNotInProject",
+                )
+
+        self._current_user = {
+            "username": user.get("username"),
+            "displayName": display_name,
+            "userId": user.get("id"),
+            "identifier": identifier,
+            "configuredName": self.config.user_name,
+            "configMatched": True if self.config.user_name else None,
+        }
+        return dict(self._current_user)
+
+    async def _identity_for_annotation(self, *, required: bool) -> dict[str, Any] | None:
+        try:
+            return await self.get_current_user()
+        except YunxiaoError:
+            if required or self.config.user_name is not None:
+                raise
+            return None
+
+    @staticmethod
+    def _mark_is_mine(
+        items: list[dict[str, Any]],
+        identifier: str | None,
+    ) -> None:
+        for item in items:
+            item["isMine"] = (
+                None
+                if identifier is None
+                else item.get("assignedTo") == identifier
+            )
+
     async def list_workitem_types(self, category: str) -> dict[str, Any]:
         body = await self._call(
             self._sdk.list_project_workitem_types_with_options_async,
@@ -279,14 +403,28 @@ class ProjexClient:
         subject_contains: str | None = None,
         status_ids: list[str] | None = None,
         assigned_to: str | None = None,
+        assigned_to_me: bool = False,
         sprint_id: str | None = None,
         max_results: int = 20,
         next_token: str | None = None,
     ) -> dict[str, Any]:
         if not 1 <= max_results <= 200:
             raise YunxiaoError("max_results 必须在 1 到 200 之间", code="InvalidParameter")
+        if assigned_to_me and assigned_to is not None:
+            raise YunxiaoError(
+                "assigned_to 与 assigned_to_me 不能同时使用",
+                code="InvalidParameter",
+            )
         if sprint_id:
             await self._ensure_sprint(sprint_id)
+        identity = await self._identity_for_annotation(required=assigned_to_me)
+        if assigned_to_me:
+            if identity is None:
+                raise YunxiaoError(
+                    "无法识别当前 AccessKey 用户",
+                    code="CurrentUserUnavailable",
+                )
+            assigned_to = str(identity["identifier"])
 
         conditions = self._build_conditions(
             subject_contains=subject_contains,
@@ -312,6 +450,7 @@ class ProjexClient:
             {key: item[key] for key in _WORKITEM_FIELDS if key in item}
             for item in (body.get("workitems") or [])
         ]
+        self._mark_is_mine(items, identity["identifier"] if identity else None)
         return {
             "items": items,
             "total_count": body.get("totalCount", len(items)),
@@ -376,7 +515,13 @@ class ProjexClient:
         return json.dumps({"conditionGroups": [conditions]}, ensure_ascii=False)
 
     async def get_workitem(self, workitem_id: str) -> dict[str, Any]:
-        return await self._ensure_workitem(workitem_id)
+        workitem = await self._ensure_workitem(workitem_id)
+        identity = await self._identity_for_annotation(required=False)
+        self._mark_is_mine(
+            [workitem],
+            identity["identifier"] if identity else None,
+        )
+        return workitem
 
     async def get_workitem_file(
         self,
@@ -560,7 +705,7 @@ class ProjexClient:
                 property_value=description,
                 field_type=description_format,
             )
-        return await self.get_workitem(workitem_id)
+        return await self._ensure_workitem(workitem_id)
 
     async def _update_fields(self, workitem_id: str, fields: dict[str, str]) -> None:
         request = devops_models.UpdateWorkitemFieldRequest(

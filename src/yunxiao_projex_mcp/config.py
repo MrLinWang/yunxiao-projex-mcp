@@ -26,6 +26,7 @@ class Config:
     endpoint: str
     access_key_id: str = field(repr=False)
     access_key_secret: str = field(repr=False)
+    user_name: str | None = None
 
 
 def _default_env_file() -> Path:
@@ -49,4 +50,5 @@ def load_config(env_file: Path | str | None = None) -> Config:
         endpoint=os.getenv("YUNXIAO_API_ENDPOINT") or DEFAULT_ENDPOINT,
         access_key_id=os.environ["YUNXIAO_USER_ACCESS_KEY_ID"],
         access_key_secret=os.environ["YUNXIAO_USER_ACCESS_KEY_SECRET"],
+        user_name=(os.getenv("YUNXIAO_USER_NAME") or "").strip() or None,
     )

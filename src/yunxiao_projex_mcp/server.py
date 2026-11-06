@@ -4,6 +4,7 @@ import base64
 import json
 import sys
 from collections.abc import Awaitable, Callable
+from pathlib import Path
 from typing import Annotated, Any, Literal
 
 from mcp.server.fastmcp import FastMCP
@@ -35,8 +36,10 @@ INSTRUCTIONS = (
     "云效 Projex 项目管理 MCP。所有操作固定作用于 .env 中 "
     "YUNXIAO_API_PROJECT_ID 指定的项目。创建或更新工作项前，先调用 "
     "list_workitem_types、list_workitem_fields、list_workitem_statuses "
-    "和 list_project_members 获取类型、必填字段、状态和账号 ID。删除操作必须显式传 "
-    "confirm=true。"
+    "和 list_project_members 获取类型、必填字段、状态和账号 ID。判断自己负责的工作项时，"
+    "调用 get_current_user 或使用 list_workitems 的 assigned_to_me。"
+    "YUNXIAO_USER_NAME 可选，未设置时自动识别，设置后必须与当前 AccessKey "
+    "用户的显示名一致。删除操作必须显式传 confirm=true。"
 )
 
 
@@ -51,6 +54,13 @@ async def _run(
         raise ToolError(str(exc)) from exc
 
 
+def _save_target(save_to: str, name: str, file_id: str) -> Path:
+    target = Path(save_to).expanduser()
+    if save_to.endswith(("/", "\\")) or target.is_dir():
+        target = target / Path(name or file_id).name
+    return target
+
+
 def create_server(client: ProjexClient) -> FastMCP:
     server = FastMCP("yunxiao-projex", instructions=INSTRUCTIONS)
 
@@ -61,6 +71,17 @@ def create_server(client: ProjexClient) -> FastMCP:
     )
     async def get_project() -> dict[str, Any]:
         return await _run(client.get_project)
+
+    @server.tool(
+        name="get_current_user",
+        description=(
+            "获取当前 AccessKey 对应的云效用户及其在当前项目中的成员 ID。"
+            "identifier 可用于与 assignedTo 比较；YUNXIAO_USER_NAME 设置后会严格校验。"
+        ),
+        annotations=READ,
+    )
+    async def get_current_user() -> dict[str, Any]:
+        return await _run(client.get_current_user)
 
     @server.tool(
         name="list_project_members",
@@ -107,7 +128,8 @@ def create_server(client: ProjexClient) -> FastMCP:
         name="list_workitems",
         description=(
             "分页查询当前项目的工作项。可按标题、状态、负责人、迭代筛选；"
-            "多个状态值按同一条件的可选值处理。"
+            "多个状态值按同一条件的可选值处理。assigned_to_me=true 只返回"
+            "当前 AccessKey 用户负责的工作项；结果含 isMine。"
         ),
         annotations=READ,
     )
@@ -116,6 +138,10 @@ def create_server(client: ProjexClient) -> FastMCP:
         subject_contains: str | None = None,
         status_ids: list[Identifier] | None = None,
         assigned_to: Identifier | None = None,
+        assigned_to_me: Annotated[
+            bool,
+            Field(description="只返回负责人为当前 AccessKey 用户的工作项。"),
+        ] = False,
         sprint_id: Identifier | None = None,
         max_results: MaxResults = 20,
         next_token: str | None = None,
@@ -126,6 +152,7 @@ def create_server(client: ProjexClient) -> FastMCP:
             subject_contains=subject_contains,
             status_ids=status_ids,
             assigned_to=assigned_to,
+            assigned_to_me=assigned_to_me,
             sprint_id=sprint_id,
             max_results=max_results,
             next_token=next_token,
@@ -133,7 +160,10 @@ def create_server(client: ProjexClient) -> FastMCP:
 
     @server.tool(
         name="get_workitem",
-        description="获取当前项目内单个工作项的完整信息。",
+        description=(
+            "获取当前项目内单个工作项的完整信息；isMine 表示负责人是否为"
+            "当前 AccessKey 用户。"
+        ),
         annotations=READ,
     )
     async def get_workitem(workitem_id: Identifier) -> dict[str, Any]:
@@ -143,13 +173,19 @@ def create_server(client: ProjexClient) -> FastMCP:
         name="get_workitem_file",
         description=(
             "认证下载当前项目工作项中的文件或图片。图片直接返回图像内容；"
-            "其他文件返回 Base64。仅支持描述等富文本中的 fileIdentifier，最大 10 MiB。"
+            "其他文件返回 Base64。可传 save_to 将文件保存到本地（目录或完整路径），"
+            "返回的 path 可用 view_image 等工具查看。仅支持描述等富文本中的 "
+            "fileIdentifier，最大 10 MiB。"
         ),
         annotations=READ,
     )
     async def get_workitem_file(
         workitem_id: Identifier,
         file_id: Identifier,
+        save_to: Annotated[
+            str | None,
+            Field(description="本地保存路径；目录或完整文件名。省略则直接返回文件内容。"),
+        ] = None,
     ) -> CallToolResult:
         file = await _run(client.get_workitem_file, workitem_id, file_id)
         metadata = {
@@ -157,6 +193,23 @@ def create_server(client: ProjexClient) -> FastMCP:
             "size": file.size,
             "mimeType": file.mime_type,
         }
+        if save_to:
+            target = _save_target(save_to, file.name, file_id)
+            try:
+                target.parent.mkdir(parents=True, exist_ok=True)
+                target.write_bytes(file.data)
+            except OSError as exc:
+                raise ToolError(f"附件保存失败: {exc}") from exc
+            saved = {**metadata, "path": str(target.resolve())}
+            return CallToolResult(
+                content=[
+                    TextContent(
+                        type="text",
+                        text=json.dumps(saved, ensure_ascii=False),
+                    )
+                ],
+                structuredContent=saved,
+            )
         text = TextContent(
             type="text",
             text=json.dumps(metadata, ensure_ascii=False),
@@ -164,18 +217,14 @@ def create_server(client: ProjexClient) -> FastMCP:
         encoded = base64.b64encode(file.data).decode("ascii")
         if file.mime_type in ("image/png", "image/jpeg", "image/gif", "image/webp"):
             image = ImageContent(type="image", data=encoded, mimeType=file.mime_type)
-            return CallToolResult(
-                content=[text, image],
-                structuredContent=metadata,
-            )
+            return CallToolResult(content=[text, image])
         resource = BlobResourceContents(
             uri=f"yunxiao://workitem/{workitem_id}/file/{file_id}",
             mimeType=file.mime_type,
             blob=encoded,
         )
         return CallToolResult(
-            content=[text, EmbeddedResource(type="resource", resource=resource)],
-            structuredContent=metadata,
+            content=[text, EmbeddedResource(type="resource", resource=resource)]
         )
 
     @server.tool(

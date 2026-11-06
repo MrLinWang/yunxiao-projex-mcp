@@ -7,7 +7,7 @@ import pytest
 
 from yunxiao_projex_mcp.client import ProjexClient, YunxiaoError
 
-from .helpers import FakeSdk, make_config
+from .helpers import FakeSdk, make_config, set_identity_responses
 
 
 class FakeTeaError(Exception):
@@ -135,6 +135,7 @@ async def test_file_download_rejects_large_metadata_before_http():
 @pytest.mark.anyio
 async def test_list_workitems_builds_conditions_and_normalizes_page():
     sdk = FakeSdk()
+    set_identity_responses(sdk)
     sdk.responses["list_workitems_with_options_async"] = {
         "success": True,
         "workitems": [
@@ -142,9 +143,15 @@ async def test_list_workitems_builds_conditions_and_normalizes_page():
                 "identifier": "w-1",
                 "subject": "cpu analysis",
                 "document": "large body",
-            }
+                "assignedTo": "user-1",
+            },
+            {
+                "identifier": "w-2",
+                "subject": "other task",
+                "assignedTo": "user-2",
+            },
         ],
-        "totalCount": 1,
+        "totalCount": 2,
         "nextToken": "next-1",
     }
     client = ProjexClient(make_config(), sdk)
@@ -157,7 +164,12 @@ async def test_list_workitems_builds_conditions_and_normalizes_page():
         max_results=50,
     )
 
-    request = sdk.calls[-1][1][1]
+    call = next(
+        call
+        for call in sdk.calls
+        if call[0] == "list_workitems_with_options_async"
+    )
+    request = call[1][1]
     conditions = json.loads(request.conditions)
     assert request.space_identifier == "project-1"
     assert request.space_type == "Project"
@@ -193,10 +205,292 @@ async def test_list_workitems_builds_conditions_and_normalizes_page():
         ]
     }
     assert result == {
-        "items": [{"identifier": "w-1", "subject": "cpu analysis"}],
-        "total_count": 1,
+        "items": [
+            {
+                "identifier": "w-1",
+                "subject": "cpu analysis",
+                "assignedTo": "user-1",
+                "isMine": True,
+            },
+            {
+                "identifier": "w-2",
+                "subject": "other task",
+                "assignedTo": "user-2",
+                "isMine": False,
+            },
+        ],
+        "total_count": 2,
         "next_token": "next-1",
     }
+
+
+@pytest.mark.anyio
+async def test_get_current_user_resolves_identifier_and_caches():
+    sdk = FakeSdk()
+    set_identity_responses(sdk)
+    client = ProjexClient(make_config(user_name="yunxiao-bot"), sdk)
+
+    user = await client.get_current_user()
+
+    assert user == {
+        "username": "aliyun_ram:yunxiao-bot",
+        "displayName": "yunxiao-bot",
+        "userId": 1,
+        "identifier": "user-1",
+        "configuredName": "yunxiao-bot",
+        "configMatched": True,
+    }
+    assert [name for name, *_ in sdk.calls] == [
+        "get_user_info_with_options_async",
+        "list_project_members_with_options_async",
+        "list_organization_members_with_options_async",
+    ]
+
+    assert await client.get_current_user() == user
+    assert (
+        sum(name == "get_user_info_with_options_async" for name, *_ in sdk.calls)
+        == 1
+    )
+
+
+@pytest.mark.anyio
+async def test_get_current_user_auto_detects_without_config():
+    sdk = FakeSdk()
+    set_identity_responses(sdk)
+
+    user = await ProjexClient(make_config(), sdk).get_current_user()
+
+    assert user["displayName"] == "yunxiao-bot"
+    assert user["configuredName"] is None
+    assert user["configMatched"] is None
+
+
+@pytest.mark.anyio
+async def test_get_current_user_rejects_mismatched_configured_name():
+    sdk = FakeSdk()
+    set_identity_responses(sdk)
+    client = ProjexClient(make_config(user_name="someone-else"), sdk)
+
+    with pytest.raises(YunxiaoError) as exc_info:
+        await client.get_current_user()
+
+    message = str(exc_info.value)
+    assert "YUNXIAO_USER_NAME" in message
+    assert "someone-else" in message
+    assert "yunxiao-bot" in message
+    assert make_config().access_key_secret not in message
+
+
+@pytest.mark.anyio
+async def test_get_current_user_falls_back_to_unique_project_display_name():
+    sdk = FakeSdk()
+    set_identity_responses(
+        sdk,
+        account_id="org-other",
+        project_member_id="project-user",
+        display_name="yunxiao-bot",
+    )
+
+    user = await ProjexClient(make_config(), sdk).get_current_user()
+
+    assert user["identifier"] == "project-user"
+
+
+@pytest.mark.anyio
+async def test_get_current_user_falls_back_when_org_member_api_fails():
+    sdk = FakeSdk()
+    set_identity_responses(sdk)
+    sdk.responses["list_organization_members_with_options_async"] = FakeTeaError()
+
+    user = await ProjexClient(make_config(), sdk).get_current_user()
+
+    assert user["identifier"] == "user-1"
+
+
+@pytest.mark.anyio
+async def test_get_current_user_rejects_user_not_in_project():
+    sdk = FakeSdk()
+    set_identity_responses(
+        sdk,
+        account_id="org-other",
+        project_member_id="project-user",
+        display_name="someone-else",
+    )
+
+    with pytest.raises(YunxiaoError, match="不在项目成员中"):
+        await ProjexClient(make_config(), sdk).get_current_user()
+
+
+@pytest.mark.anyio
+async def test_get_current_user_rejects_ambiguous_project_member():
+    sdk = FakeSdk()
+    set_identity_responses(sdk)
+    sdk.responses["list_organization_members_with_options_async"] = {
+        "success": True,
+        "members": [
+            {
+                "accountId": "user-1",
+                "organizationMemberName": "yunxiao-bot",
+                "state": "normal",
+            },
+            {
+                "accountId": "user-2",
+                "organizationMemberName": "yunxiao-bot",
+                "state": "normal",
+            },
+        ],
+    }
+    sdk.responses["list_project_members_with_options_async"] = {
+        "success": True,
+        "members": [
+            {"identifier": "user-1", "displayName": "yunxiao-bot"},
+            {"identifier": "user-2", "displayName": "yunxiao-bot"},
+        ],
+    }
+
+    with pytest.raises(YunxiaoError, match="无法唯一确定"):
+        await ProjexClient(make_config(), sdk).get_current_user()
+
+
+@pytest.mark.anyio
+async def test_list_workitems_assigned_to_me_uses_current_identifier():
+    sdk = FakeSdk()
+    set_identity_responses(sdk)
+    sdk.responses["list_workitems_with_options_async"] = {
+        "success": True,
+        "workitems": [
+            {
+                "identifier": "w-1",
+                "subject": "mine",
+                "assignedTo": "user-1",
+            }
+        ],
+        "totalCount": 1,
+    }
+    client = ProjexClient(make_config(), sdk)
+
+    result = await client.list_workitems("Req", assigned_to_me=True)
+
+    call = next(
+        call
+        for call in sdk.calls
+        if call[0] == "list_workitems_with_options_async"
+    )
+    conditions = json.loads(call[1][1].conditions)
+    assert conditions == {
+        "conditionGroups": [
+            [
+                {
+                    "fieldIdentifier": "assignedTo",
+                    "operator": "CONTAINS",
+                    "value": ["user-1"],
+                    "toValue": None,
+                    "className": "user",
+                    "format": "list",
+                }
+            ]
+        ]
+    }
+    assert result["items"][0]["isMine"] is True
+
+
+@pytest.mark.anyio
+async def test_list_workitems_rejects_assigned_to_conflict():
+    sdk = FakeSdk()
+    client = ProjexClient(make_config(), sdk)
+
+    with pytest.raises(YunxiaoError, match="不能同时"):
+        await client.list_workitems(
+            "Req",
+            assigned_to="user-1",
+            assigned_to_me=True,
+        )
+
+    assert sdk.calls == []
+
+
+@pytest.mark.anyio
+async def test_list_workitems_marks_unknown_identity_as_null():
+    sdk = FakeSdk()
+    sdk.responses["get_user_info_with_options_async"] = {
+        "success": False,
+        "errorCode": "Operate.NoPermission",
+        "errorMsg": "NoPermission",
+    }
+    sdk.responses["list_workitems_with_options_async"] = {
+        "success": True,
+        "workitems": [
+            {
+                "identifier": "w-1",
+                "subject": "task",
+                "assignedTo": "user-1",
+            }
+        ],
+    }
+
+    result = await ProjexClient(make_config(), sdk).list_workitems("Req")
+
+    assert result["items"][0]["isMine"] is None
+
+
+@pytest.mark.anyio
+async def test_list_workitems_with_explicit_config_requires_identity():
+    sdk = FakeSdk()
+    sdk.responses["get_user_info_with_options_async"] = {
+        "success": False,
+        "errorCode": "Operate.NoPermission",
+        "errorMsg": "NoPermission",
+    }
+    client = ProjexClient(make_config(user_name="yunxiao-bot"), sdk)
+
+    with pytest.raises(YunxiaoError):
+        await client.list_workitems("Req")
+
+    assert all(
+        name != "list_workitems_with_options_async"
+        for name, _args, _kwargs in sdk.calls
+    )
+
+
+@pytest.mark.anyio
+async def test_get_workitem_marks_is_mine():
+    sdk = FakeSdk()
+    set_identity_responses(sdk)
+    sdk.responses["get_work_item_info_with_options_async"] = {
+        "success": True,
+        "workitem": {
+            "identifier": "w-1",
+            "spaceIdentifier": "project-1",
+            "assignedTo": "user-1",
+        },
+    }
+    client = ProjexClient(make_config(), sdk)
+
+    result = await client.get_workitem("w-1")
+
+    assert result["isMine"] is True
+
+
+@pytest.mark.anyio
+async def test_get_workitem_marks_unknown_identity_as_null():
+    sdk = FakeSdk()
+    sdk.responses["get_user_info_with_options_async"] = {
+        "success": False,
+        "errorCode": "Operate.NoPermission",
+        "errorMsg": "NoPermission",
+    }
+    sdk.responses["get_work_item_info_with_options_async"] = {
+        "success": True,
+        "workitem": {
+            "identifier": "w-1",
+            "spaceIdentifier": "project-1",
+            "assignedTo": "user-1",
+        },
+    }
+
+    result = await ProjexClient(make_config(), sdk).get_workitem("w-1")
+
+    assert result["isMine"] is None
 
 
 @pytest.mark.anyio
@@ -239,7 +533,7 @@ async def test_sdk_exception_is_normalized():
     assert "403" in message
     assert "Operate.NoPermission" in message
     assert "request-1" in message
-    assert "test-secret" not in message
+    assert make_config().access_key_secret not in message
 
 
 @pytest.mark.anyio
@@ -308,6 +602,7 @@ async def test_update_status_falls_back_to_update_work_item():
     assert result["subject"] == "updated"
     called = [name for name, _args, _kwargs in sdk.calls]
     assert "update_work_item_with_options_async" in called
+    assert "get_user_info_with_options_async" not in called
 
 
 @pytest.mark.anyio
